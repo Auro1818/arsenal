@@ -7,6 +7,28 @@ local CFG = {
 }
 getgenv().CFG = CFG
 
+--📏 FOV Settings:
+local FOV_RADIUS = 150
+local FOV_COLOR = Color3.new(1, 1, 0)
+
+local function drawFOV()
+	local circle = Drawing.new("Circle")
+	circle.Radius = FOV_RADIUS
+	circle.Thickness = 2
+	circle.Transparency = 0.6
+	circle.Color = FOV_COLOR
+	circle.Visible = true
+	circle.Filled = false
+
+	game:GetService("RunService").RenderStepped:Connect(function()
+		local pos = workspace.CurrentCamera.ViewportSize / 2
+		circle.Position = Vector2.new(pos.X, pos.Y)
+		circle.Visible = getgenv().CFG.SilentAim
+	end)
+end
+
+drawFOV()
+
 --🧠 AUTO GAME CHECK:
 if game.PlaceId ~= 286090429 then
     warn("❌ This script only works in Arsenal!")
@@ -84,21 +106,25 @@ Players.PlayerAdded:Connect(function(p)
     p.CharacterAdded:Connect(function() task.wait(1); createTextESP(p) end)
 end)
 
---🎯 SILENTAIM HOOK:
+--🎯 SILENTAIM + FOV:
 local Camera = workspace.CurrentCamera
 local function getClosestTarget()
-    local target, dist = nil, math.huge
-    for _,p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild(CFG.AimPart) then
-            local pos = p.Character[CFG.AimPart].Position
-            local d = (Camera.CFrame.Position - pos).Magnitude
-            if d < dist then
-                dist = d
-                target = p
-            end
-        end
-    end
-    return target
+	local mousePos = workspace.CurrentCamera.ViewportSize / 2
+	local target, dist = nil, FOV_RADIUS
+
+	for _,p in pairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild(CFG.AimPart) then
+			local screenPos, onScreen = workspace.CurrentCamera:WorldToViewportPoint(p.Character[CFG.AimPart].Position)
+			local mag = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+
+			if onScreen and mag < dist then
+				dist = mag
+				target = p
+			end
+		end
+	end
+
+	return target
 end
 
 local oldNC = hookmetamethod(game, "__namecall", function(self,...)
@@ -178,5 +204,5 @@ UIS.InputBegan:Connect(function(input)
     end
 end)
 
---✅ DONE!
-log("Arsenal cheat loaded ✅")
+--✅ LOADED!
+log("✅ Arsenal Cheat Loaded with FOV")
