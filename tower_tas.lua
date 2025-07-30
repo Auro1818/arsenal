@@ -1,104 +1,121 @@
--- Tower of Hell TAS Auto Script (TAS Smart)
--- Repo: https://github.com/Auro1818/arsenal/
--- Compatible with Mobile Executor
+-- Tower of Hell Smart TAS Script (Auto-run + Pathfinding + Ghost)
+-- Phù hợp với mobile executor, tải script lên GitHub theo đường dẫn cố định
 
-if not game.PlaceId == 1962086868 then
-    return warn("Not Tower of Hell!")
-end
+-- Wait until map tower sections fully load
+repeat task.wait(0.1) until workspace:FindFirstChild("tower") and workspace.tower:FindFirstChild("Sections")
 
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+local Players      = game:GetService("Players")
+local LocalPlayer  = Players.LocalPlayer
+local RunService   = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
--- GUI
-local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
-local Frame = Instance.new("Frame", ScreenGui)
-Frame.Size = UDim2.new(0, 200, 0, 300)
-Frame.Position = UDim2.new(0.02, 0, 0.3, 0)
-Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-Frame.BorderSizePixel = 0
-
-local title = Instance.new("TextLabel", Frame)
-title.Text = "Tower TAS"
-title.Size = UDim2.new(1, 0, 0, 30)
-title.BackgroundTransparency = 1
-title.TextColor3 = Color3.new(1,1,1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 20
-
-local autoRun = false
-local toggleButton = Instance.new("TextButton", Frame)
-toggleButton.Size = UDim2.new(1, -20, 0, 30)
-toggleButton.Position = UDim2.new(0, 10, 0, 50)
-toggleButton.Text = "Auto Run: OFF"
-toggleButton.BackgroundColor3 = Color3.fromRGB(50,50,50)
-toggleButton.TextColor3 = Color3.new(1,1,1)
-toggleButton.MouseButton1Click:Connect(function()
-    autoRun = not autoRun
-    toggleButton.Text = "Auto Run: " .. (autoRun and "ON" or "OFF")
-end)
-
--- Auto Jump / Pathfinding
-function smartMove()
-    local character = LocalPlayer.Character
-    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
-
-    local root = character.HumanoidRootPart
-    local platforms = workspace:FindFirstChild("tower"):GetDescendants()
-
-    local checkpoints = {}
-    for _, part in ipairs(platforms) do
-        if part:IsA("BasePart") and part.Size.Y < 2 then
-            table.insert(checkpoints, part.Position + Vector3.new(0, 5, 0))
-        end
-    end
-
-    table.sort(checkpoints, function(a, b)
-        return a.Y < b.Y
-    end)
-
-    for _, pos in ipairs(checkpoints) do
-        if not autoRun then break end
-        local dist = (root.Position - pos).magnitude
-        local tween = TweenService:Create(root, TweenInfo.new(dist/25, Enum.EasingStyle.Linear), {CFrame = CFrame.new(pos)})
-        tween:Play()
-        tween.Completed:Wait()
-    end
+if game.PlaceId ~= 1962086868 then
+    warn("Not Tower of Hell. Stopping script.")
+    return
 end
 
--- Anti-AFK
-LocalPlayer.Idled:Connect(function()
-    game.VirtualInputManager:SendKeyEvent(true, "Space", false, game)
+-- GUI setup
+local gui = Instance.new("ScreenGui", game.CoreGui)
+gui.Name = "TowerTASGui"
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 200, 0, 260)
+frame.Position = UDim2.new(0.02, 0, 0.35, 0)
+frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+
+local function btn(text, y, fn)
+    local b = Instance.new("TextButton", frame)
+    b.Size = UDim2.new(1, -20, 0, 30)
+    b.Position = UDim2.new(0, 10, 0, y)
+    b.Text = text
+    b.BackgroundColor3 = Color3.fromRGB(60,60,60)
+    b.TextColor3 = Color3.new(1,1,1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 16
+    b.MouseButton1Click:Connect(fn)
+    return b
+end
+
+local autoEnabled = false
+local ghostEnabled = false
+local lastSafePos = nil
+
+local lblStatus = Instance.new("TextLabel", frame)
+lblStatus.Size = UDim2.new(1, -20, 0, 30)
+lblStatus.Position = UDim2.new(0,10,0,220)
+lblStatus.BackgroundTransparency = 1
+lblStatus.TextColor3 = Color3.new(1,1,1)
+lblStatus.Text = "Status: OFF"
+lblStatus.TextSize = 16
+lblStatus.Font = Enum.Font.Gotham
+
+local btnAuto = btn("Auto: OFF", 10, function()
+    autoEnabled = not autoEnabled
+    btnAuto.Text = "Auto: " .. (autoEnabled and "ON" or "OFF")
+    lblStatus.Text = autoEnabled and "Status: RUNNING" or "Status: PAUSED"
 end)
 
--- Ghost Mode toggle
-local ghost = false
-local ghostBtn = Instance.new("TextButton", Frame)
-ghostBtn.Size = UDim2.new(1, -20, 0, 30)
-ghostBtn.Position = UDim2.new(0, 10, 0, 90)
-ghostBtn.Text = "Ghost Mode: OFF"
-ghostBtn.BackgroundColor3 = Color3.fromRGB(50,50,50)
-ghostBtn.TextColor3 = Color3.new(1,1,1)
-ghostBtn.MouseButton1Click:Connect(function()
-    ghost = not ghost
-    ghostBtn.Text = "Ghost Mode: " .. (ghost and "ON" or "OFF")
+local btnGhost = btn("Ghost Mode: OFF", 50, function()
+    ghostEnabled = not ghostEnabled
+    btnGhost.Text = "Ghost: " .. (ghostEnabled and "ON" or "OFF")
+end)
+
+-- Pathfinding logic
+local function getClosestPlatform()
     local char = LocalPlayer.Character
-    if char then
-        for _, v in pairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then
-                v.CanCollide = not ghost
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local root = char.HumanoidRootPart
+    local pool = {}
+    for _, part in ipairs(workspace.tower.Sections:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide and not part:IsDescendantOf(char) then
+            local vec = part.Position - root.Position
+            -- choose platform within range and upward
+            if vec.Y > -5 and vec.Y < 20 and vec.Magnitude < 50 then
+                table.insert(pool, {p = part, d = vec.Magnitude})
             end
         end
     end
-end)
+    table.sort(pool, function(a,b) return a.d < b.d end)
+    return pool[1] and pool[1].p or nil
+end
 
--- Loop
 RunService.Heartbeat:Connect(function()
-    if autoRun then
-        smartMove()
-    end
+    if not autoEnabled then return end
+    pcall(function()
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        -- Ghost mode
+        if ghostEnabled then
+            for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("BasePart") then v.CanCollide = false end
+            end
+        end
+
+        -- Reset if falling
+        if root.Position.Y < -10 then
+            if lastSafePos then
+                root.CFrame = CFrame.new(lastSafePos + Vector3.new(0,5,0))
+            else
+                LocalPlayer:LoadCharacter()
+            end
+            return
+        end
+
+        -- Platform detection
+        local plat = getClosestPlatform()
+        if plat then
+            lastSafePos = root.Position
+            local target = plat.Position + Vector3.new(0,3,0)
+            local dist = (root.Position - target).Magnitude
+            local tween = TweenService:Create(root, TweenInfo.new(dist / 25, Enum.EasingStyle.Linear), {CFrame = CFrame.new(target)})
+            tween:Play()
+            tween.Completed:Wait()
+        else
+            -- no platform, auto jump
+            char.Humanoid.Jump = true
+        end
+    end)
 end)
 
-print("✅ Tower of Hell TAS Loaded")
+print("Tower TAS Smart script loaded.")
